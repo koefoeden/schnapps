@@ -1,0 +1,120 @@
+```{r setup}
+library(tidyverse)
+theme_set(theme_bw())
+
+
+data <- readxl::read_excel("data.xlsx")
+
+schnapps_info <- readxl::read_excel("schnapps.xlsx") %>% mutate(schnapps=schnapps %>% as.character())
+
+wide <- names(data)[-c(1,2)] %>% 
+  map_dfc(~ data %>% 
+            select(.x) %>% 
+            separate(.x, into = paste0(.x, c("_taste", "_creativity",
+                                             "_look","_market_potential")), 
+                     sep = ",")
+  ) %>% 
+  bind_cols(data[1:2]) %>% 
+  relocate(participant, sex) %>% 
+  mutate(across(3:last_col(), .fns = as.numeric))
+
+wide_w_lists <- data %>% 
+  mutate(across(.cols = `1`:last_col(), 
+                .fns = ~{.x %>% 
+                    as_vector() %>% 
+                    str_split(pattern = ",") %>% 
+                    map(as.double)}))
+long <- wide %>% pivot_longer(cols=3:last_col())
+
+wide_only_taste <- wide %>% select(participant, sex, contains("taste"))
+```
+
+
+# Average points
+## Across all
+```{r}
+average_pts <- long %>% 
+  group_by(participant, sex) %>% 
+  summarise(avg=mean(value)*4)
+
+average_pts %>% ggplot(aes(x=reorder(participant, avg), y=avg, col=sex, fill=sex)) +
+  geom_col() + 
+  ylab("Average points given for each schnapps") +
+  xlab("") +
+  coord_flip() +
+  theme(legend.position = "none")
+```
+# Outliers
+## All
+```{r}
+make_PCA_plot <- function(wide_data, only_based_on=NULL) {
+  
+if (only_based_on %>% is.null()) {
+  
+PCA_data <- wide_data[-c(1,2)] %>% prcomp()
+}
+  else {
+PCA_data <- wide_data %>% select(contains(only_based_on)) %>% prcomp()
+    
+  }
+wide_data %>% 
+  bind_cols(PCA_data$x) %>% 
+  ggplot(aes(x=PC1, y=PC2, label=participant, color=sex)) + 
+  geom_point() +
+  ggrepel::geom_label_repel() +
+  ylab("First dimension") +
+  xlab("Second dimension") +
+  theme(legend.position = "none")
+}
+
+make_PCA_plot(wide, only_based_on = NULL)
+
+## Only taste
+# make_PCA_plot(wide, only_based_on = "taste")
+
+## Only creativity
+# make_PCA_plot(wide, only_based_on = "creativity")
+
+# Only look
+# make_PCA_plot(wide, only_based_on = "look")
+
+# Market potential
+# make_PCA_plot(wide, only_based_on = "market")
+```
+
+# Winning schnapps
+```{r}
+points_per_schanpps <- wide_w_lists %>% 
+  mutate(across(.cols = 3:last_col(),
+                .fns = ~.x %>% map(~sum(.x)) %>% unlist())) %>% 
+  summarise(across(.cols = 3:last_col(),
+                   .fns = sum)) %>% 
+  pivot_longer(cols = everything())
+
+
+points_per_schanpps %>% full_join(schnapps_info, by=c("name"="schnapps")) %>% 
+  ggplot(aes(x=reorder(name,value), y=value, color=-value, fill=-value,)) +
+  geom_col() + 
+  xlab("Schnapps number") +
+  ylab("Total points") +
+  coord_flip() +
+  theme(legend.position = "none") +
+  geom_text(aes(label=maker), color="white", nudge_y = -200) +
+  geom_text(aes(label=ingredients), color="white",nudge_y=-75)
+```
+# Effect of sex
+```{r}
+t_tester <- function(wide_df, schnapps_no) {
+  
+males <- wide_df %>% filter(sex=="M") %>% select(contains(schnapps_no)) %>% pull()
+females <- wide_df %>% filter(sex=="F") %>% select(contains(schnapps_no)) %>% pull()
+test <- t.test(males, females)
+
+return(test$p.value)
+}
+
+for (i in 1:8) {
+t_tester(wide_df = wide, schnapps_no = as.character(i))  %>% print()
+  }
+```
+
