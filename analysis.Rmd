@@ -3,15 +3,17 @@ library(tidyverse)
 theme_set(theme_bw())
 
 
-data <- readxl::read_excel("data.xlsx")
+data <- readxl::read_excel("schnapps_points.xlsx")
 
-schnapps_info <- readxl::read_excel("schnapps.xlsx") %>% mutate(schnapps=schnapps %>% as.character())
+schnapps_info <- readxl::read_excel("schnapps_info.xlsx") %>% 
+  mutate(schnapps=as.character(number),
+         description=str_glue("{ingredients} by {maker}"))
 
 wide <- names(data)[-c(1,2)] %>% 
   map_dfc(~ data %>% 
             select(.x) %>% 
-            separate(.x, into = paste0(.x, c("_taste", "_creativity",
-                                             "_look","_market_potential")), 
+            separate(.x, into = paste0(.x, c("_Taste", "_Creativity",
+                                             "_Look","_Market")), 
                      sep = ",")
   ) %>% 
   bind_cols(data[1:2]) %>% 
@@ -26,7 +28,7 @@ wide_w_lists <- data %>%
                     map(as.double)}))
 long <- wide %>% pivot_longer(cols=3:last_col())
 
-wide_only_taste <- wide %>% select(participant, sex, contains("taste"))
+wide_only_Taste <- wide %>% select(participant, sex, contains("taste"))
 ```
 
 
@@ -39,7 +41,15 @@ average_pts <- long %>%
 
 average_pts %>% ggplot(aes(x=reorder(participant, avg), y=avg, col=sex, fill=sex)) +
   geom_col() + 
-  ylab("Average points given for each schnapps") +
+  ylab("") +
+  ylim(c(0,30)) +
+  ggtitle("Average points given for each schnapps") +
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y = element_blank(),
+        text=element_text(size=20),
+        rect = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  geom_text(aes(label=participant), color="white", hjust=0, y=1) +
   xlab("") +
   coord_flip() +
   theme(legend.position = "none")
@@ -49,40 +59,32 @@ average_pts %>% ggplot(aes(x=reorder(participant, avg), y=avg, col=sex, fill=sex
 ```{r}
 make_PCA_plot <- function(wide_data, only_based_on=NULL) {
   
-if (only_based_on %>% is.null()) {
-  
-PCA_data <- wide_data[-c(1,2)] %>% prcomp()
-}
+  if (only_based_on %>% is.null()) {
+    
+    PCA_data <- wide_data[-c(1,2)] %>% prcomp()
+  }
   else {
-PCA_data <- wide_data %>% select(contains(only_based_on)) %>% prcomp()
+    PCA_data <- wide_data %>% select(contains(only_based_on)) %>% prcomp()
     
   }
-wide_data %>% 
-  bind_cols(PCA_data$x) %>% 
-  ggplot(aes(x=PC1, y=PC2, label=participant, color=sex)) + 
-  geom_point() +
-  ggrepel::geom_label_repel() +
-  ylab("First dimension") +
-  xlab("Second dimension") +
-  theme(legend.position = "none")
+  wide_data %>% 
+    bind_cols(PCA_data$x) %>% 
+    ggplot(aes(x=PC1, y=PC2, label=participant, color=sex)) + 
+    geom_point() +
+    ggrepel::geom_label_repel() +
+    ylab("") +
+    xlab("") +
+    theme(legend.position = "none",
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          text = element_text(size = 15)) +
+    ggtitle("Voting similarity (closer people are more similar)")
 }
 
 make_PCA_plot(wide, only_based_on = NULL)
-
-## Only taste
-# make_PCA_plot(wide, only_based_on = "taste")
-
-## Only creativity
-# make_PCA_plot(wide, only_based_on = "creativity")
-
-# Only look
-# make_PCA_plot(wide, only_based_on = "look")
-
-# Market potential
-# make_PCA_plot(wide, only_based_on = "market")
 ```
 
-# Winning schnapps
+# Overall schnapps-ranking
 ```{r}
 points_per_schanpps <- wide_w_lists %>% 
   mutate(across(.cols = 3:last_col(),
@@ -92,29 +94,133 @@ points_per_schanpps <- wide_w_lists %>%
   pivot_longer(cols = everything())
 
 
-points_per_schanpps %>% full_join(schnapps_info, by=c("name"="schnapps")) %>% 
+overall_ranking_plot <- points_per_schanpps %>% 
+  full_join(schnapps_info, by=c("name"="schnapps")) %>% 
   ggplot(aes(x=reorder(name,value), y=value, color=-value, fill=-value,)) +
   geom_col() + 
-  xlab("Schnapps number") +
-  ylab("Total points") +
+  ylab("Points") +
+  xlab("") +
   coord_flip() +
   theme(legend.position = "none") +
-  geom_text(aes(label=maker), color="white", nudge_y = -200) +
-  geom_text(aes(label=ingredients), color="white",nudge_y=-75)
+  geom_text(aes(label=ingredients, y=5),size=6, color="white", hjust=0) +
+  theme(text=element_text(size=21),
+        panel.grid.minor.x = element_line(size = 0.5),
+        axis.ticks.y = element_blank(),
+        axis.text.y=element_blank()) +
+  ggtitle("Overall schnapps-ranking") +
+  theme(rect = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y =element_blank())+
+  scale_y_continuous(expand = expansion(),
+                     limits = c(0,350))
+
+ggsave(filename = "plots/overall_ranking.pdf", plot=overall_ranking_plot)
 ```
-# Effect of sex
+
+# Schnapps ranking per category
 ```{r}
-t_tester <- function(wide_df, schnapps_no) {
-  
-males <- wide_df %>% filter(sex=="M") %>% select(contains(schnapps_no)) %>% pull()
-females <- wide_df %>% filter(sex=="F") %>% select(contains(schnapps_no)) %>% pull()
-test <- t.test(males, females)
+measures <- c("taste",
+         "creativity",
+         "looks",
+         "market potential")
 
-return(test$p.value)
-}
+per_measure_rankings <- imap(measures, 
+              ~{
+                points_per_schanpps <- wide_w_lists %>% 
+                  mutate(across(.cols = 3:last_col(),
+                                .fns = ~{.x %>% 
+                                    map(.f = function(scores_4) {
+                                      scores_4 %>% 
+                                        `[`(.y)}) %>% 
+                                    unlist()})) %>% 
+                  summarise(across(.cols = 3:last_col(),
+                                   .fns = sum)) %>% 
+                  pivot_longer(cols = everything())
+                
+                
+                points_per_schanpps %>% 
+                  full_join(schnapps_info, by=c("name"="schnapps")) %>% 
+                  ggplot(aes(x=reorder(name,value), y=value, color=-value, fill=-value,)) +
+                  geom_col() + 
+                  ylab("Points") +
+                  xlab("") +
+                  coord_flip() +
+                  theme(legend.position = "none") +
+                  geom_text(aes(label=ingredients, y=3),size=4, color="white", hjust=0) +
+                  theme(text=element_text(size=20),
+                        panel.grid.minor.x = element_line(size = 0.5),
+                        axis.ticks.y = element_blank(),
+                        axis.text.y=element_blank()) +
+                  ggtitle(str_glue("Based on {.x} only")) +
+                  theme(rect = element_blank(),
+                        panel.grid.major.y = element_blank(),
+                        panel.grid.minor.y =element_blank())+
+                  scale_y_continuous(expand = expansion())
+              }
+)
+per_measure_rankings
 
-for (i in 1:8) {
-t_tester(wide_df = wide, schnapps_no = as.character(i))  %>% print()
-  }
+combined_per_measure_rankings <- cowplot::plot_grid(plotlist = per_measure_rankings)
+ggsave(filename = "plots/combined_per_measure_rankings.pdf", plot = combined_per_measure_rankings, width = 15, height = 10)
+```
+
+# Radar plot of each schnapps
+```{r, fig.width=10, fig.height=10}
+schnapps_ids <- c("1","2","3","4","5","6","7","9")
+
+dfs <- map(schnapps_ids, 
+           ~{wide %>% select(contains(.x)) %>%
+               mutate(schnapps=.x) %>% 
+               relocate(schnapps) %>% 
+               group_by(schnapps) %>%
+               summarise(across(everything(),.fns = sum)) %>% 
+               rename_with(.fn = function(col_name) {str_remove(string = col_name,
+                                                                pattern = "..")},
+                           .cols = 2:last_col()
+               )
+           }
+           
+)
+
+radar_plot_for_each_schnapps <- imap(dfs, 
+              ~{schnapps_id <- .x %>% pull(schnapps)
+              ingredient <- schnapps_info %>% filter(schnapps==schnapps_id) %>% pull(ingredients)
+              
+              .x %>% 
+                ggradar::ggradar(grid.mid = 60,
+                                 grid.max = 120,
+                                 values.radar = c("","60 pts","120 pts"),
+                                 fill = TRUE,
+                                 fill.alpha = 0.15,
+                                 group.colours = RColorBrewer::brewer.pal(8, "Dark2")[.y],
+                                 legend.position = "bottom",
+                                 axis.label.offset = 1.1,
+                                 plot.title = ingredient) + 
+                theme(plot.title = element_text(hjust = 0.5),
+                      plot.margin = unit(c(0,0,0,0), "cm"))
+              
+              })
+# combined_radar_plot <- cowplot::plot_grid(plotlist = radar_plot_for_each_schnapps, ncol = 2, nrow = 4,hjust = 0, vjust = 0)
+combined_radar_plot <- patchwork::wrap_plots( radar_plot_for_each_schnapps, ncol = 2, nrow = 4)
+combined_radar_plot_first <- patchwork::wrap_plots(radar_plot_for_each_schnapps[1:4], ncol = 2, nrow = 2)
+combined_radar_plot_second <- patchwork::wrap_plots(radar_plot_for_each_schnapps[5:8], ncol = 2, nrow = 2)
+ggsave(filename = "plots/radar_plot_all_schnapps_both.pdf",plot = combined_radar_plot, width =unit(20, "in"), height = unit(20, "in"))
+ggsave(filename = "plots/radar_plot_all_schnapps_first.pdf",plot = combined_radar_plot_first, width =unit(12, "in"), height = unit(12, "in"))
+ggsave(filename = "plots/radar_plot_all_schnapps_second.pdf",plot = combined_radar_plot_second, width =unit(12, "in"), height = unit(12, "in"))
+```
+
+
+# Variance for each person
+```{r}
+long %>% 
+  group_by(participant) %>% 
+  summarise(value=var(value)) %>% 
+  ggplot(aes(x=reorder(participant, value), y=value, color=-value, fill=-value)) +
+  geom_col() + 
+  xlab("") +
+  ylab("Voting eraticness (variance)") +
+  coord_flip() +
+  theme(legend.position = "none") +
+  theme(text=element_text(size=21))
 ```
 
